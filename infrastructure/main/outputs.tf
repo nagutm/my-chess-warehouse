@@ -16,3 +16,18 @@ output "lichess_token_parameter" {
   description = "SSM Parameter Store path for Lichess token"
   value       = aws_ssm_parameter.lichess_token.name
 }
+
+output "ingestion_lambda_function_name" {
+  description = "Name of the ingestion Lambda function"
+  value       = aws_lambda_function.ingestion.function_name
+}
+
+output "ingestion_lambda_arn" {
+  description = "ARN of the ingestion Lambda function"
+  value       = aws_lambda_function.ingestion.arn
+}
+
+output "ingestion_lambda_role_arn" {
+  description = "ARN of the ingestion Lambda execution role"
+  value       = aws_iam_role.ingestion_lambda.arn
+}

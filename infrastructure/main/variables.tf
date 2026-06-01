@@ -14,6 +14,11 @@ variable "lichess_token" {
   description = "Lichess personal access token (never log or commit this)"
 }
 
+variable "lichess_username" {
+  type        = string
+  description = "Lichess username to fetch games for"
+}
+
 variable "bucket_name" {
   type        = string
   description = "Name of the S3 bucket used for raw chess data storage"
