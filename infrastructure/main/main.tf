@@ -36,26 +36,14 @@ resource "aws_ssm_parameter" "lichess_token" {
   }
 }
 
-# ============================================================================
-# INGESTION LAMBDA (Story 2.3)
-# ============================================================================
-# Fetches games from Lichess, stores raw NDJSON to S3, and normalizes to DynamoDB.
-# Runs nightly on schedule, incremental (cursor-based), idempotent.
-
-# Archive the Lambda code (handler.py + dependencies from requirements.txt)
-# This is computed on every plan so source code changes trigger automatic redeployment.
 data "archive_file" "ingestion_lambda" {
   type        = "zip"
   source_dir  = "${path.module}/../../backend/lambda"
   output_path = "${path.module}/../../backend/.terraform/ingestion_lambda.zip"
 
-  # Include only the handler and requirements; exclude any other files
   excludes = [".gitignore", "*.pyc", "__pycache__"]
 }
 
-# IAM role for the ingestion Lambda function.
-# Assumes this role when invoked; the role grants the minimum permissions needed
-# to read the Lichess token, fetch games, and update the data warehouse.
 resource "aws_iam_role" "ingestion_lambda" {
   name = "chess-warehouse-ingestion-lambda-role"
 
@@ -73,13 +61,6 @@ resource "aws_iam_role" "ingestion_lambda" {
   })
 }
 
-# IAM policy: least-privilege permissions for the ingestion Lambda.
-# Grants:
-#   - ssm:GetParameter for the Lichess token (SecureString)
-#   - s3:PutObject to the raw games bucket (scoped to raw/ prefix)
-#   - dynamodb:GetItem, PutItem, BatchWriteItem, Query on the chess-games table
-#     (for cursor reads, game upserts, and cursor advancement)
-#   - logs:CreateLogGroup, CreateLogStream, PutLogEvents for CloudWatch Logs
 resource "aws_iam_role_policy" "ingestion_lambda" {
   name = "chess-warehouse-ingestion-policy"
   role = aws_iam_role.ingestion_lambda.id
@@ -100,6 +81,13 @@ resource "aws_iam_role_policy" "ingestion_lambda" {
           "s3:PutObject"
         ]
         Resource = "${aws_s3_bucket.raw_games.arn}/raw/lichess/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sns:Publish"
+        ]
+        Resource = aws_sns_topic.ingestion_failures.arn
       },
       {
         Effect = "Allow"
@@ -125,24 +113,14 @@ resource "aws_iam_role_policy" "ingestion_lambda" {
   })
 }
 
-# The ingestion Lambda function.
-# Triggered nightly by EventBridge Scheduler (S2.6).
-# Uses the archive hash to detect code changes and auto-redeploy.
 resource "aws_lambda_function" "ingestion" {
   function_name = "chess-warehouse-ingestion"
   role          = aws_iam_role.ingestion_lambda.arn
-
-  # Handler location: handler.py, function lambda_handler
   handler = "handler.lambda_handler"
-
-  # Runtime: Python 3.11+ is recommended for cold start and feature support
   runtime = "python3.11"
-
-  # Source code: zip file from the archive_file data source above
   filename         = data.archive_file.ingestion_lambda.output_path
   source_code_hash = data.archive_file.ingestion_lambda.output_base64sha256
 
-  # Environment variables passed to the Lambda function
   environment {
     variables = {
       DYNAMODB_TABLE     = aws_dynamodb_table.chess_games.name
@@ -152,11 +130,7 @@ resource "aws_lambda_function" "ingestion" {
     }
   }
 
-  # Timeout: 15 minutes is Lambda's max, but v1 runs are small.
-  # Backfill (2026-05-01 to now) is ~one request; nightly increments are tiny.
   timeout = 300
-
-  # Memory: 256 MB is sufficient for JSON parsing and network I/O.
   memory_size = 256
 
   # Enable CloudWatch Logs
@@ -172,7 +146,6 @@ resource "aws_lambda_function" "ingestion" {
   ]
 }
 
-# CloudWatch Log Group for ingestion Lambda
 resource "aws_cloudwatch_log_group" "ingestion_lambda" {
   name              = "/aws/lambda/chess-warehouse-ingestion"
   retention_in_days = 7
@@ -184,4 +157,74 @@ resource "aws_cloudwatch_log_group" "ingestion_lambda" {
 
 # Data source: current AWS account ID (used in ARN construction)
 data "aws_caller_identity" "current" {}
+
+# SNS topic to receive ingestion failure notifications.
+resource "aws_sns_topic" "ingestion_failures" {
+  name = "chess-warehouse-ingestion-failures"
+}
+
+# Optional SNS subscription for email alerts on ingestion failures.
+resource "aws_sns_topic_subscription" "ingestion_failure_email" {
+  count      = var.failure_alert_email != "" ? 1 : 0
+  topic_arn  = aws_sns_topic.ingestion_failures.arn
+  protocol   = "email"
+  endpoint   = var.failure_alert_email
+}
+
+# EventBridge rule (cron) to trigger the ingestion Lambda nightly.
+resource "aws_cloudwatch_event_rule" "nightly_ingestion" {
+  name                = "chess-warehouse-nightly-ingestion"
+  description         = "Trigger the ingestion Lambda nightly"
+  schedule_expression = var.ingestion_schedule_cron
+}
+
+# Allow EventBridge to invoke the Lambda function
+resource "aws_lambda_permission" "allow_eventbridge_invoke" {
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ingestion.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.nightly_ingestion.arn
+}
+
+# EventBridge target wiring the rule to the Lambda function.
+resource "aws_cloudwatch_event_target" "nightly_ingestion_target" {
+  rule      = aws_cloudwatch_event_rule.nightly_ingestion.name
+  target_id = "ingestion-lambda"
+  arn       = aws_lambda_function.ingestion.arn
+}
+
+# Configure asynchronous invocation failure destination: SNS topic.
+# This ensures failed async invocations are sent to the topic for alerting
+# and manual inspection. The ingestion Lambda is invoked by EventBridge
+# and configured here to send failures to SNS.
+resource "aws_lambda_function_event_invoke_config" "ingestion_async_config" {
+  function_name = aws_lambda_function.ingestion.function_name
+  maximum_retry_attempts = 0
+
+  destination_config {
+    on_failure {
+      destination = aws_sns_topic.ingestion_failures.arn
+    }
+  }
+}
+
+# CloudWatch alarm on Lambda errors routed to SNS
+resource "aws_cloudwatch_metric_alarm" "ingestion_errors_alarm" {
+  alarm_name          = "chess-warehouse-ingestion-errors"
+  alarm_description   = "Alarm when the ingestion Lambda reports errors"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  alarm_actions       = [aws_sns_topic.ingestion_failures.arn]
+
+  dimensions = {
+    FunctionName = aws_lambda_function.ingestion.function_name
+  }
+}
+
 

@@ -23,3 +23,15 @@ variable "bucket_name" {
   type        = string
   description = "Name of the S3 bucket used for raw chess data storage"
 }
+
+variable "ingestion_schedule_cron" {
+  type        = string
+  description = "Cron expression for the nightly ingestion schedule"
+  default     = "cron(0 3 * * ? *)"
+}
+
+variable "failure_alert_email" {
+  type        = string
+  description = "Optional email address to subscribe to ingestion failure alerts"
+  default     = ""
+}
