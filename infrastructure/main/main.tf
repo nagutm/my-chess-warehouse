@@ -114,10 +114,10 @@ resource "aws_iam_role_policy" "ingestion_lambda" {
 }
 
 resource "aws_lambda_function" "ingestion" {
-  function_name = "chess-warehouse-ingestion"
-  role          = aws_iam_role.ingestion_lambda.arn
-  handler = "handler.lambda_handler"
-  runtime = "python3.11"
+  function_name    = "chess-warehouse-ingestion"
+  role             = aws_iam_role.ingestion_lambda.arn
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.11"
   filename         = data.archive_file.ingestion_lambda.output_path
   source_code_hash = data.archive_file.ingestion_lambda.output_base64sha256
 
@@ -130,7 +130,7 @@ resource "aws_lambda_function" "ingestion" {
     }
   }
 
-  timeout = 300
+  timeout     = 300
   memory_size = 256
 
   # Enable CloudWatch Logs
@@ -165,10 +165,10 @@ resource "aws_sns_topic" "ingestion_failures" {
 
 # Optional SNS subscription for email alerts on ingestion failures.
 resource "aws_sns_topic_subscription" "ingestion_failure_email" {
-  count      = var.failure_alert_email != "" ? 1 : 0
-  topic_arn  = aws_sns_topic.ingestion_failures.arn
-  protocol   = "email"
-  endpoint   = var.failure_alert_email
+  count     = var.failure_alert_email != "" ? 1 : 0
+  topic_arn = aws_sns_topic.ingestion_failures.arn
+  protocol  = "email"
+  endpoint  = var.failure_alert_email
 }
 
 # EventBridge rule (cron) to trigger the ingestion Lambda nightly.
@@ -199,7 +199,7 @@ resource "aws_cloudwatch_event_target" "nightly_ingestion_target" {
 # and manual inspection. The ingestion Lambda is invoked by EventBridge
 # and configured here to send failures to SNS.
 resource "aws_lambda_function_event_invoke_config" "ingestion_async_config" {
-  function_name = aws_lambda_function.ingestion.function_name
+  function_name          = aws_lambda_function.ingestion.function_name
   maximum_retry_attempts = 0
 
   destination_config {
