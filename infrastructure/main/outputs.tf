@@ -7,6 +7,16 @@ output "raw_games_bucket" {
   value       = aws_s3_bucket.raw_games.id
 }
 
+output "frontend_bucket_name" {
+  description = "S3 bucket name for the static frontend site"
+  value       = aws_s3_bucket.static_site.bucket
+}
+
+output "frontend_cloudfront_domain" {
+  description = "CloudFront distribution domain for the static frontend site"
+  value       = aws_cloudfront_distribution.site.domain_name
+}
+
 output "chess_games_table" {
   description = "DynamoDB table for normalized games"
   value       = aws_dynamodb_table.chess_games.name
