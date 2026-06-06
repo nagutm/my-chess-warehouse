@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chess Warehouse Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="page-shell">
+    <header>
+      <h1>Chess Warehouse Dashboard</h1>
+      <p class="intro">A static frontend scaffold for the personal chess data dashboard.</p>
+    </header>
+
+    <section class="card" id="status-card">
+      <h2>Frontend Status</h2>
+      <p id="status-text">Static site scaffolding is ready. Add charts, data fetching, and UI components in <code>frontend/app.js</code>.</p>
+    </section>
+
+    <section class="card">
+      <h2>Next step</h2>
+      <p>Deploy this page to the private S3 bucket + CloudFront distribution configured in Terraform.</p>
+      <p class="small">API CORS is configured to allow the CloudFront origin for browser-based calls.</p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
