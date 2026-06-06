@@ -1,3 +1,7 @@
+locals {
+  frontend_bucket_name = "${lower(replace(var.github_repo, "/", "-"))}-frontend"
+}
+
 resource "aws_s3_bucket" "raw_games" {
   bucket = var.bucket_name
 }
@@ -153,6 +157,257 @@ resource "aws_cloudwatch_log_group" "ingestion_lambda" {
   tags = {
     Name = "chess-warehouse-ingestion"
   }
+}
+
+# Stats Lambda package contains the backend package so imports like backend.lambda.aggregations work.
+data "archive_file" "stats_lambda" {
+  type        = "zip"
+  source_dir  = "${path.module}/../../backend"
+  output_path = "${path.module}/../../backend/.terraform/stats_lambda.zip"
+
+  excludes = [
+    ".gitignore",
+    ".terraform",
+    "*.pyc",
+    "__pycache__",
+    "tests/*",
+  ]
+}
+
+resource "aws_iam_role" "stats_lambda" {
+  name = "chess-warehouse-stats-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "stats_lambda" {
+  name = "chess-warehouse-stats-policy"
+  role = aws_iam_role.stats_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Query",
+        ]
+        Resource = aws_dynamodb_table.chess_games.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/chess-warehouse-stats*"
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "stats_lambda" {
+  name              = "/aws/lambda/chess-warehouse-stats"
+  retention_in_days = 7
+
+  tags = {
+    Name = "chess-warehouse-stats"
+  }
+}
+
+resource "aws_lambda_function" "stats" {
+  function_name    = "chess-warehouse-stats"
+  role             = aws_iam_role.stats_lambda.arn
+  handler          = "lambda.stats_handler.lambda_handler"
+  runtime          = "python3.11"
+  filename         = data.archive_file.stats_lambda.output_path
+  source_code_hash = data.archive_file.stats_lambda.output_base64sha256
+
+  environment {
+    variables = {
+      DYNAMODB_TABLE   = aws_dynamodb_table.chess_games.name
+      LICHESS_USERNAME = var.lichess_username
+    }
+  }
+
+  timeout     = 30
+  memory_size = 256
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.stats_lambda.name
+  }
+
+  depends_on = [
+    data.archive_file.stats_lambda,
+    aws_iam_role_policy.stats_lambda,
+  ]
+}
+
+resource "aws_apigatewayv2_api" "stats_api" {
+  name          = "chess-warehouse-stats-api"
+  protocol_type = "HTTP"
+
+  cors_configuration {
+    allow_origins = ["https://${aws_cloudfront_distribution.site.domain_name}"]
+    allow_methods = ["GET", "HEAD", "OPTIONS"]
+    allow_headers = ["Content-Type", "Authorization"]
+    max_age       = 3600
+  }
+}
+
+resource "aws_apigatewayv2_integration" "stats_lambda" {
+  api_id                 = aws_apigatewayv2_api.stats_api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.stats.arn
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+  timeout_milliseconds   = 30000
+}
+
+resource "aws_apigatewayv2_route" "summary" {
+  api_id    = aws_apigatewayv2_api.stats_api.id
+  route_key = "GET /stats/summary"
+  target    = "integrations/${aws_apigatewayv2_integration.stats_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "openings" {
+  api_id    = aws_apigatewayv2_api.stats_api.id
+  route_key = "GET /stats/openings"
+  target    = "integrations/${aws_apigatewayv2_integration.stats_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "ratings" {
+  api_id    = aws_apigatewayv2_api.stats_api.id
+  route_key = "GET /stats/ratings"
+  target    = "integrations/${aws_apigatewayv2_integration.stats_lambda.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.stats_api.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+resource "aws_lambda_permission" "allow_api_invoke" {
+  statement_id  = "AllowStatsApiInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.stats.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.stats_api.execution_arn}/*/*"
+}
+
+resource "aws_s3_bucket" "static_site" {
+  bucket = local.frontend_bucket_name
+
+  tags = {
+    Name = "chess-warehouse-static-site"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "static_site" {
+  bucket = aws_s3_bucket.static_site.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_cloudfront_origin_access_control" "site_oac" {
+  name                              = "chess-warehouse-static-site-oac"
+  description                       = "CloudFront origin access control for the static site bucket"
+  origin_access_control_origin_type = "s3"
+  signing_protocol                  = "sigv4"
+  signing_behavior                  = "always"
+}
+
+resource "aws_cloudfront_distribution" "site" {
+  enabled             = true
+  default_root_object = "index.html"
+  price_class         = "PriceClass_100"
+
+  origin {
+    domain_name              = aws_s3_bucket.static_site.bucket_regional_domain_name
+    origin_id                = "static-site-origin"
+    origin_access_control_id = aws_cloudfront_origin_access_control.site_oac.id
+  }
+
+  default_cache_behavior {
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "static-site-origin"
+    viewer_protocol_policy = "redirect-to-https"
+    compress               = true
+
+    forwarded_values {
+      query_string = false
+
+      cookies {
+        forward = "none"
+      }
+    }
+  }
+
+  custom_error_response {
+    error_code         = 403
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
+  custom_error_response {
+    error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+resource "aws_s3_bucket_policy" "static_site" {
+  bucket = aws_s3_bucket.static_site.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudFrontGetObject"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.static_site.arn}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn"     = aws_cloudfront_distribution.site.arn
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
 }
 
 # Data source: current AWS account ID (used in ARN construction)
