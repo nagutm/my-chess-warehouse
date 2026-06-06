@@ -25,7 +25,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Sync frontend assets to S3
-        run: aws s3 sync frontend/ s3://${{ secrets.TF_VAR_FRONTEND_BUCKET_NAME }} --delete
+        run: aws s3 sync frontend/ s3://${{ secrets.FRONTEND_BUCKET_NAME }} --delete
 
       - name: Invalidate CloudFront cache
         run: |
