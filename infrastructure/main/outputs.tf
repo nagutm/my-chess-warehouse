@@ -31,3 +31,18 @@ output "ingestion_lambda_role_arn" {
   description = "ARN of the ingestion Lambda execution role"
   value       = aws_iam_role.ingestion_lambda.arn
 }
+
+output "stats_lambda_function_name" {
+  description = "Name of the stats Lambda function"
+  value       = aws_lambda_function.stats.function_name
+}
+
+output "stats_lambda_arn" {
+  description = "ARN of the stats Lambda function"
+  value       = aws_lambda_function.stats.arn
+}
+
+output "stats_api_endpoint" {
+  description = "HTTP API endpoint for stats routes"
+  value       = aws_apigatewayv2_api.stats_api.api_endpoint
+}

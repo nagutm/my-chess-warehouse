@@ -155,6 +155,150 @@ resource "aws_cloudwatch_log_group" "ingestion_lambda" {
   }
 }
 
+# Stats Lambda package contains the backend package so imports like backend.lambda.aggregations work.
+data "archive_file" "stats_lambda" {
+  type        = "zip"
+  source_dir  = "${path.module}/../../backend"
+  output_path = "${path.module}/../../backend/.terraform/stats_lambda.zip"
+
+  excludes = [
+    ".gitignore",
+    ".terraform",
+    "*.pyc",
+    "__pycache__",
+    "tests/*",
+  ]
+}
+
+resource "aws_iam_role" "stats_lambda" {
+  name = "chess-warehouse-stats-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "stats_lambda" {
+  name = "chess-warehouse-stats-policy"
+  role = aws_iam_role.stats_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Query",
+        ]
+        Resource = aws_dynamodb_table.chess_games.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/chess-warehouse-stats*"
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "stats_lambda" {
+  name              = "/aws/lambda/chess-warehouse-stats"
+  retention_in_days = 7
+
+  tags = {
+    Name = "chess-warehouse-stats"
+  }
+}
+
+resource "aws_lambda_function" "stats" {
+  function_name    = "chess-warehouse-stats"
+  role             = aws_iam_role.stats_lambda.arn
+  handler          = "lambda.stats_handler.lambda_handler"
+  runtime          = "python3.11"
+  filename         = data.archive_file.stats_lambda.output_path
+  source_code_hash = data.archive_file.stats_lambda.output_base64sha256
+
+  environment {
+    variables = {
+      DYNAMODB_TABLE   = aws_dynamodb_table.chess_games.name
+      LICHESS_USERNAME = var.lichess_username
+    }
+  }
+
+  timeout     = 30
+  memory_size = 256
+
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.stats_lambda.name
+  }
+
+  depends_on = [
+    data.archive_file.stats_lambda,
+    aws_iam_role_policy.stats_lambda,
+  ]
+}
+
+resource "aws_apigatewayv2_api" "stats_api" {
+  name          = "chess-warehouse-stats-api"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_integration" "stats_lambda" {
+  api_id                 = aws_apigatewayv2_api.stats_api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.stats.arn
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+  timeout_milliseconds   = 30000
+}
+
+resource "aws_apigatewayv2_route" "summary" {
+  api_id    = aws_apigatewayv2_api.stats_api.id
+  route_key = "GET /stats/summary"
+  target    = "integrations/${aws_apigatewayv2_integration.stats_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "openings" {
+  api_id    = aws_apigatewayv2_api.stats_api.id
+  route_key = "GET /stats/openings"
+  target    = "integrations/${aws_apigatewayv2_integration.stats_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "ratings" {
+  api_id    = aws_apigatewayv2_api.stats_api.id
+  route_key = "GET /stats/ratings"
+  target    = "integrations/${aws_apigatewayv2_integration.stats_lambda.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.stats_api.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+resource "aws_lambda_permission" "allow_api_invoke" {
+  statement_id  = "AllowStatsApiInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.stats.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.stats_api.execution_arn}/*/*"
+}
+
 # Data source: current AWS account ID (used in ARN construction)
 data "aws_caller_identity" "current" {}
 
