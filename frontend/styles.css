@@ -66,3 +66,37 @@ header h1 {
   font-size: 0.95rem;
   margin: 0.5rem 0 0;
 }
+
+/* Dashboard specific */
+.controls .row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+.controls label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.muted { color: #6b7280; }
+.error { color: #b91c1c; font-weight: 600; }
+
+.two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.stat-cards { display: flex; gap: 0.75rem; }
+.stat-card { padding: 0.75rem; border-radius: 12px; background: linear-gradient(180deg,#fff 0,#fbfbff 100%); box-shadow: 0 6px 18px rgba(16,24,40,0.04); min-width: 140px; }
+.stat-card .stat-label { font-size: 0.85rem; color: #6b7280; }
+.stat-card .stat-value { font-size: 1.05rem; font-weight: 700; margin-top: 0.35rem; }
+.stat-card .stat-sub { font-size: 0.85rem; color: #6b7280; margin-top: 0.35rem; }
+.stat-card .stat-rate { margin-top: 0.5rem; font-weight: 700; }
+.card-white { border: 1px solid rgba(99,102,241,0.08); }
+.card-black { border: 1px solid rgba(55,65,81,0.06); }
+
+table { width: 100%; border-collapse: collapse; }
+thead th { text-align: left; padding: 0.5rem 0; border-bottom: 1px solid rgba(17,24,39,0.06); }
+tbody td { padding: 0.6rem 0; }
+
+@media (max-width: 800px) {
+  .page-shell { width: min(100%, 96%); }
+  .two-up { grid-template-columns: 1fr; }
+  .stat-cards { flex-direction: column; }
+}
