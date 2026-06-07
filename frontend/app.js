@@ -152,7 +152,9 @@ function renderRatings(ratingsResp) {
   const ratings = ratingsResp.ratings || {};
   const datasets = Object.keys(ratings).map((speed, idx) => ({
     label: speed,
-    data: (ratings[speed] || []).map((p) => ({ x: new Date(p.lastMoveAt), y: p.rating })),
+    data: (ratings[speed] || [])
+      .map((p) => ({ x: p.lastMoveAt, y: p.rating }))
+      .sort((a, b) => a.x - b.x),
     borderColor: palette(idx),
     backgroundColor: palette(idx, 0.15),
     tension: 0.2,
