@@ -9,7 +9,7 @@
 <body>
   <main class="page-shell">
     <header>
-      <h1>Chess Warehouse — Charts</h1>
+      <h1>Chess Warehouse</h1>
       <p class="intro">A small, static dashboard. API base injected at build time into <code>window.__API_BASE__</code>.</p>
     </header>
 
@@ -52,8 +52,7 @@
     </section>
   </main>
 
-  <!-- API base placeholder: replace __API_BASE__ at build time with the API URL string -->
-  <script>window.__API_BASE__ = "__API_BASE__";</script>
+  <script>window.__API_BASE__ = "https://agdcf7hvqd.execute-api.us-east-1.amazonaws.com";</script>
 
   <!-- Chart.js + date adapter via CDN (no build step required) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
